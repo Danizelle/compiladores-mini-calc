@@ -286,7 +286,7 @@ x + 2  # -> 44
 ---
 # Associatividade
 1 + 2 + 3 + 4;  # -> 10
-1 * 2 * 3 * 4;  # -> 30  // Teste falha mas é esperado pois o teste foi escrito errado
+1 * 2 * 3 * 4;  # -> 24
 2 ^ 3 ^ 2       # -> 512
 """
 
