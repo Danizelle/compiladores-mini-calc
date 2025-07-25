@@ -26,28 +26,38 @@ from lark import Lark, Transformer, v_args
 #
 GRAMMAR = r"""
 
-start   :  "40 + 2" 
+start   : program
 
 // Lista de expressões separadas por ponto e vírgula
 // 
 // A semântica da lingugem é: expressões de atribuição salvam o valor no 
 // dicionário de variáveis e outras expressões devem imprimir o resultado ao 
 // serem executadas 
-program : "..."
+program : expr (";" expr)*
 
 // Expressões matemáticas ou atribuição de variáveis
-expr    : "..."
+expr    : assignment | add_expr
+
+assignment : VAR "=" add_expr
+
+?add_expr : mul_expr ("+" mul_expr)*
+?mul_expr : pow_expr ("*" pow_expr)*
+?pow_expr : atom ("^" pow_expr)?
+
+?atom : NUMBER | variable | "(" add_expr ")"
+
+variable : VAR
 
 // Terminais
-NUMBER  : "..."
-VAR     : "..."
-COMMENT : /\# -> 42/ // Comentários são como em Python 
+NUMBER  : /[0-9]+/
+VAR     : /[a-z]+/
+COMMENT : /#[^\n]*/ // Comentários são como em Python 
 
 %ignore /\s+/
 %ignore COMMENT  
 """
 
-grammar = Lark(GRAMMAR, start="start", parser="lalr", lexer="standard")
+grammar = Lark(GRAMMAR, start="start", parser="lalr", lexer="basic")
 
 #
 # ETAPA 2: Emissão do bytecode. Usamos um transformer do Lark para percorrer a
@@ -91,16 +101,59 @@ class Instr:
 #
 @v_args(inline=True)
 class VmTransformer(Transformer):
-    def start(self, *items: Block):
-        for item in items:
-            yield from item
+    def start(self, program):
+        return program
 
-    def add(self, left: Block, right: Block) -> Block:
-        yield Instr("LOAD", "x")  # Corrija a implementação!
-        yield Instr("LOAD", "y")
-        yield Instr("ADD")
+    def program(self, *exprs):
+        result = []
+        for expr in exprs:
+            if expr:
+                result.extend(expr)
+        return result
 
-    ...  # Implemente as outras operações matemáticas aqui
+    def assignment(self, var, expr):
+        result = list(expr)
+        result.append(Instr("STORE", var))
+        return result
+
+    def add_expr(self, left, *rights):
+        result = list(left)
+        for right in rights:
+            result.extend(right)
+            result.append(Instr("ADD"))
+        return result
+
+    def mul_expr(self, left, *rights):
+        result = list(left)
+        for right in rights:
+            result.extend(right)
+            result.append(Instr("MUL"))
+        return result
+
+    def pow_expr(self, left, right=None):
+        result = list(left)
+        if right:
+            result.extend(right)
+            result.append(Instr("POW"))
+        return result
+
+    def atom(self, value):
+        return value
+
+    def NUMBER(self, token):
+        return [Instr("CONST", int(token))]
+
+    def VAR(self, token):
+        return str(token)
+    
+    def variable(self, var_name):
+        return [Instr("LOAD", var_name)]
+
+    def expr(self, value):
+        result = list(value)
+        if not result or result[-1].type != "STORE":
+            result.append(Instr("PRINT"))
+        return result
 
 
 transformer = VmTransformer()
@@ -130,40 +183,52 @@ class VM:
     locals: dict[str, int] = field(default_factory=dict)
 
     def eval(self, instructions: list[Instr]) -> Any:
-        print("42")  # passa no teste inicial, apague depois!
-
         for instr in instructions:
-            # Debug: imprime a instrução atual, depois comente fora essas linhas!
-            print(f"{instr} @ {self.stack}")
-            print(self.locals)
-
             match instr.type:
                 case "NOP":
-                    ...
+                    pass
 
                 case "POP_TOP":
-                    ...
+                    if self.stack:
+                        self.stack.pop()
 
-                # Obs.: Caso a variável não exista no dicionário, deve perguntar
-                # o valor para o usuário e salvá-la no dicionário.
                 case "LOAD":
-                    ...
+                    var_name = instr.arg
+                    if var_name not in self.locals:
+                        value = input(f"Digite o valor para a variável '{var_name}': ")
+                        self.locals[var_name] = int(value)
+                    self.stack.append(self.locals[var_name])
 
                 case "STORE":
-                    ...
+                    var_name = instr.arg
+                    value = self.stack.pop()
+                    self.locals[var_name] = value
 
                 case "CONST":
-                    ...
+                    self.stack.append(instr.arg)
+
+                case "PRINT":
+                    if self.stack:
+                        value = self.stack.pop()
+                        print(value)
 
                 case "ADD":
-                    ...
+                    if len(self.stack) >= 2:
+                        right = self.stack.pop()
+                        left = self.stack.pop()
+                        self.stack.append(left + right)
 
                 case "MUL":
-                    ...
+                    if len(self.stack) >= 2:
+                        right = self.stack.pop()
+                        left = self.stack.pop()
+                        self.stack.append(left * right)
 
-                # Lembre-se que operador de exponenciação é `**` em Python
                 case "POW":
-                    ...
+                    if len(self.stack) >= 2:
+                        right = self.stack.pop()
+                        left = self.stack.pop()
+                        self.stack.append(left ** right)
 
                 case _:
                     raise TypeError("instrução inválida")
@@ -180,9 +245,21 @@ def repl():
     """
     print("Bem-vindo ao REPL da mini linguagem! 🎉 ✨")
     print("Digite 'sair' para encerrar.")
+    vm = VM()
+    
     while True:
-        line = input(">>> ")
-        ...
+        try:
+            line = input(">>> ")
+            if line.strip().lower() == 'sair':
+                break
+            if line.strip():
+                instructions = parse(line)
+                vm.eval(instructions)
+        except (KeyboardInterrupt, EOFError):
+            print("\nSaindo...")
+            break
+        except Exception as e:
+            print(f"Erro: {e}")
 
 
 #
@@ -209,7 +286,7 @@ x + 2  # -> 44
 ---
 # Associatividade
 1 + 2 + 3 + 4;  # -> 10
-1 * 2 * 3 * 4;  # -> 30
+1 * 2 * 3 * 4;  # -> 24
 2 ^ 3 ^ 2       # -> 512
 """
 
